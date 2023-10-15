@@ -1,0 +1,4 @@
+{
+  "sagemaker_role_id": "arn:aws:iam::245675801864:role/SagemakerInvokeEndpointRole",
+  "s3_bucket": "arn:aws:s3:::elf-malware"
+}
