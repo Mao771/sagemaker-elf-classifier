@@ -1,8 +1,12 @@
 import glob
 import os.path
+
+import numpy
 import pandas as pd
 import argparse
 import joblib
+import json
+
 from io import StringIO
 
 from sklearn.feature_extraction.text import TfidfTransformer
@@ -15,43 +19,52 @@ os.environ.setdefault('SM_MODEL_DIR', 'model')
 os.environ.setdefault('SM_CHANNEL_TRAIN', 'train')
 
 MODEL_NAME = "sgd_elf_classifier.joblib"
+COUNT_VECTORIZER_NAME = "count_vectorizer.joblib"
+TFIDF_VECTORIZER_NAME = "tfidf_vectorizer.joblib"
 
 
 def model_fn(model_dir):
     print("Model function")
     try:
         clf = joblib.load(os.path.join(model_dir, MODEL_NAME))
+        count_vect = joblib.load(os.path.join(model_dir, COUNT_VECTORIZER_NAME))
+        tf_idf_vectorizer = joblib.load(os.path.join(model_dir, TFIDF_VECTORIZER_NAME))
     except Exception:
         print("Model not found")
         clf = None
-    return clf
+        count_vect = None
+        tf_idf_vectorizer = None
+    return clf, count_vect, tf_idf_vectorizer
 
-
-def process_data(data):
-    return data
-
-
-def transform_data(data):
-    return data
+#
+# def transform_data(data: pd.DataFrame):
+#     input_counts = count_vect.fit_transform(data)
+#     input_tfidf = tf_idf_vectorizer.fit_transform(input_counts)
+#     return input_tfidf
 
 
 def input_fn(request_body, request_content_type):
     print("Input function")
-    if request_content_type == "text/csv":
-        data = pd.read_csv(StringIO(request_body))
-        return process_data(data)
+    if request_content_type == "application/json":
+        request_body = json.load(StringIO(request_body))
+        df = pd.DataFrame(request_body["files"])
+        return df
     else:
         # Handle other content-types here or raise an Exception
         # if the content type is not supported.
         raise ValueError("{} not supported by script!".format(request_content_type))
 
 
-def predict_fn(input_data, model):
+def predict_fn(input_data: pd.DataFrame, model_tuple):
     print("Predict function")
-    X = transform_data(input_data)
-    print(X)
-    prediction = model.predict(X)
-    return {'predicted-value': prediction}
+    print(input_data.head())
+    print(len(input_data))
+    model, count_vect, tf_idf_vectorizer = model_tuple
+    input_counts = count_vect.transform(input_data.iloc[0])
+    input_tfidf = tf_idf_vectorizer.transform(input_counts)
+    prediction = model.predict(input_tfidf)
+    print(prediction)
+    return prediction
 
 
 def prepare_training_data(training_files):
@@ -60,15 +73,17 @@ def prepare_training_data(training_files):
         data.append(pd.read_csv(file))
 
 
-def output_fn(prediction, accept):
+def output_fn(prediction: numpy.ndarray, accept):
     print("Output function")
-    return prediction
+    return {"prediction": list(prediction)}
 
 
 def run_training(args):
     print("Training SGD classifier")
     training_files = glob.glob(os.path.join(args.train, "*.csv"))
     sgd = SGDClassifier(loss="log_loss", verbose=1, average=True)
+    count_vect = CountVectorizer(ngram_range=(4, 4))
+    tf_idf_vectorizer = TfidfTransformer()
 
     for training_file in training_files:
         print(training_file)
@@ -77,9 +92,7 @@ def run_training(args):
         train_x = train_df[args.opcodes_column]
         train_y: pd.Series = train_df[args.target_column]
 
-        count_vect = CountVectorizer(ngram_range=(4, 4))
         X_train_counts = count_vect.fit_transform(train_x)
-        tf_idf_vectorizer = TfidfTransformer()
         X_train_tfidf = tf_idf_vectorizer.fit_transform(X_train_counts)
 
         print(train_y.value_counts())
@@ -87,6 +100,8 @@ def run_training(args):
         sgd.fit(X_train_tfidf, train_y)
 
     joblib.dump(sgd, os.path.join(args.model_dir, MODEL_NAME))
+    joblib.dump(count_vect, os.path.join(args.model_dir, COUNT_VECTORIZER_NAME))
+    joblib.dump(tf_idf_vectorizer, os.path.join(args.model_dir, TFIDF_VECTORIZER_NAME))
 
 
 if __name__ == '__main__':
